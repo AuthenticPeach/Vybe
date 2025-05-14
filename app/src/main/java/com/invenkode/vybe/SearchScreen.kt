@@ -1,3 +1,4 @@
+// SearchScreen.kt
 package com.invenkode.vybe
 
 import androidx.compose.foundation.Image
@@ -8,58 +9,119 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi                   // ← add this
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil.compose.rememberAsyncImagePainter
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalComposeUiApi::class                        // ← opt into keyboard API
+)
 @Composable
-fun SearchScreen(navController: NavController) {
-    var query by remember { mutableStateOf("") }
-    var results by remember { mutableStateOf<List<VideoItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
+fun SearchScreen(
+    navController: NavController,
+    vm: SearchViewModel = viewModel()
+) {
+    val query by vm.query.collectAsState()
+    val suggestions by vm.suggestions.collectAsState()
+    val results by vm.results.collectAsState()
+    val isLoading by vm.isLoading.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        TextField(
-            value = query,
-            onValueChange = { query = it },
-            label = { Text("Search YouTube") },
+    var expanded by remember { mutableStateOf(false) }
+
+    // to keep focus on the TextField and keep the keyboard up
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        ExposedDropdownMenuBox(
+            expanded = expanded && suggestions.isNotEmpty(),
+            onExpandedChange = { expanded = it },
             modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = {
-            isLoading = true
-            // Launch a coroutine to perform the search (update BingSearchService accordingly)
-            CoroutineScope(Dispatchers.IO).launch {
-                // Assume BingSearchService.searchYouTube(query) returns List<String> of raw URLs.
-                val rawResults = BingSearchService.searchYouTube(query)
-                // Map each URL to a VideoItem using our helper.
-                results = rawResults.map { url ->
-                    val id = extractVideoId(url)
-                    VideoItem(
-                        videoId = id,
-                        thumbnailUrl = "https://img.youtube.com/vi/$id/0.jpg",
-                        title = "Title for $id", // Replace with real title extraction if available
-                        duration = "3:45"        // Replace with real duration if available
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = {
+                    vm.onQueryChange(it)
+                    expanded = true
+                },
+                label = { Text("Search YouTube") },
+                singleLine = true,
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                },
+                modifier = Modifier
+                    .menuAnchor()
+                    .focusRequester(focusRequester)
+                    .fillMaxWidth()
+            )
+
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = (6 * 56).dp)
+            ) {
+                suggestions.take(6).forEach { suggestion ->
+                    DropdownMenuItem(
+                        text = { Text(suggestion) },
+                        onClick = {
+                            vm.onQueryChange(suggestion)
+                            expanded = false
+                            focusRequester.requestFocus()
+                            keyboardController?.show()
+                            vm.performSearch()
+                        }
                     )
                 }
-                isLoading = false
             }
-        }) {
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = { vm.performSearch() },
+            enabled = !isLoading,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Text("Search")
         }
+
         Spacer(modifier = Modifier.height(16.dp))
 
         if (isLoading) {
-            CircularProgressIndicator()
+            Box(modifier = Modifier.fillMaxWidth()) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            }
         } else {
+            if (results.isEmpty() && suggestions.isNotEmpty()) {
+                Text(
+                    text = "Did you mean “${suggestions.first()}”?",
+                    modifier = Modifier
+                        .clickable {
+                            vm.onQueryChange(suggestions.first())
+                            vm.performSearch()
+                        }
+                        .padding(8.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             LazyColumn {
                 items(results) { video ->
-                    VideoListItem(video = video) {
-                        // Navigate to a video player screen using the video ID
+                    VideoListItem(video) {
                         navController.navigate("video/${video.videoId}")
                     }
                 }
@@ -84,9 +146,9 @@ fun VideoListItem(video: VideoItem, onClick: () -> Unit) {
         )
         Spacer(modifier = Modifier.width(8.dp))
         Column {
-            Text(text = video.title, style = MaterialTheme.typography.titleMedium)
+            Text(video.title, style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(4.dp))
-            Text(text = video.duration, style = MaterialTheme.typography.bodySmall)
+            Text(video.duration, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
